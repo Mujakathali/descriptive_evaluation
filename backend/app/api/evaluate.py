@@ -1,13 +1,16 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Body
 from typing import Optional, List
 import io
+from pydantic import BaseModel, Field
 from app.models.schemas import EvaluationResponse, TeacherFileProcessResponse
 from app.services.preprocessing import preprocess_text
 from app.services.similarity_service import calculate_semantic_similarity
-from app.services.concept_service import calculate_concept_coverage
-from app.services.scoring_service import calculate_final_marks, validate_weights
+from app.services.concept_service import calculate_concept_coverage, extract_concepts_from_text
+from app.services.scoring_service import validate_weights
+from app.services.strict_scoring_service import calculate_strict_marks
 from app.services.feedback_service import generate_feedback_llm
 from app.services.ocr_service import extract_text_from_file
+from app.services.full_paper_evaluator import evaluate_full_paper
 from app.database.db import save_evaluation, get_evaluation, get_evaluations
 from datetime import datetime
 import logging
@@ -90,14 +93,22 @@ async def evaluate_answer(
             student_answer_processed
         )
         
-        # Step 6: Calculate final marks
-        final_marks = calculate_final_marks(
+        # Extract required concepts from model answer for gating
+        required_concepts = extract_concepts_from_text(teacher_answer_processed, max_concepts=15)
+        
+        # Step 6: Calculate final marks using strict scoring
+        scoring_result = calculate_strict_marks(
             semantic_similarity_score,
             concept_data["coverage"],
             semanticWeight,
             conceptWeight,
-            maxMarks
+            maxMarks,
+            student_answer_processed,
+            concept_data["covered_concepts"],
+            required_concepts
         )
+        
+        final_marks = scoring_result['marks']
         
         # Step 7: Generate feedback
         feedback = generate_feedback_llm(
@@ -113,12 +124,18 @@ async def evaluate_answer(
         response_data = {
             "finalScore": final_marks,
             "maxMarks": maxMarks,
+            "label": scoring_result['label'],
             "semanticSimilarity": semantic_similarity_percent,
             "conceptCoverage": concept_data["coverage"],
             "coveredConcepts": concept_data["covered_concepts"],
             "missingConcepts": concept_data["missing_concepts"],
+            "requiredConcepts": required_concepts,
             "feedback": feedback,
-            "conceptAnalysis": concept_data["concept_analysis"]
+            "conceptAnalysis": concept_data["concept_analysis"],
+            "penaltiesApplied": {
+                "lengthPenalty": scoring_result['length_penalty_applied'],
+                "conceptGating": scoring_result['concept_gating_applied']
+            }
         }
         
         # Step 9: Save to database (async, non-blocking)
@@ -307,5 +324,106 @@ async def submit_feedback(evaluation_id: str, feedback: dict):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to submit feedback: {str(e)}"
+        )
+
+
+# Full Paper Evaluation Models
+class FullPaperEvaluationRequest(BaseModel):
+    questions: str
+    model_answers: str = Field(..., description="Model answer key text")
+    student_answers: str = Field(..., description="Student answer sheet text")
+    marks_per_question: float = Field(..., gt=0, description="Marks per question")
+    semantic_weight: float = Field(0.5, ge=0, le=1, description="Weight for semantic similarity")
+    concept_weight: float = Field(0.5, ge=0, le=1, description="Weight for concept coverage")
+    
+    class Config:
+        protected_namespaces = ()
+
+
+@router.post("/evaluate/full-paper")
+async def evaluate_full_paper_endpoint(request: FullPaperEvaluationRequest = Body(...)):
+    """
+    Evaluate a full question paper with multiple questions
+    
+    Accepts:
+    - Full question paper text (numbered: 1. Question 2. Question...)
+    - Full model answer key (numbered: 1. Answer 2. Answer...)
+    - Full student answer sheet (numbered: 1. Answer 2. Answer...)
+    - Marks per question
+    - Evaluation weights
+    
+    Returns:
+    - Summary with total marks, marks obtained, overall performance
+    - Question-wise detailed results with marks, similarity, feedback
+    """
+    try:
+        # Validate weights
+        if not validate_weights(request.semantic_weight, request.concept_weight):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Weights must sum to 1.0 (got {request.semantic_weight + request.concept_weight})"
+            )
+        
+        if request.marks_per_question <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="marks_per_question must be greater than 0"
+            )
+        
+        # Validate inputs
+        if not request.questions.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Questions text cannot be empty"
+            )
+        
+        if not request.model_answers.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Model answers text cannot be empty"
+            )
+        
+        if not request.student_answers.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Student answers text cannot be empty"
+            )
+        
+        # For strict evaluation, default to 50/50 weights for balanced scoring
+        # But allow override if explicitly provided
+        if request.semantic_weight == 0.0 and request.concept_weight == 0.0:
+            # Use default 50/50 for strict evaluation
+            semantic_weight = 0.5
+            concept_weight = 0.5
+        else:
+            semantic_weight = request.semantic_weight
+            concept_weight = request.concept_weight
+            # Ensure weights sum to 1.0
+            if abs(semantic_weight + concept_weight - 1.0) > 0.01:
+                total = semantic_weight + concept_weight
+                semantic_weight = semantic_weight / total
+                concept_weight = concept_weight / total
+        
+        # Evaluate full paper
+        result = evaluate_full_paper(
+            questions_text=request.questions,
+            model_answers_text=request.model_answers,
+            student_answers_text=request.student_answers,
+            marks_per_question=request.marks_per_question,
+            semantic_weight=semantic_weight,
+            concept_weight=concept_weight
+        )
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error in full paper evaluation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Full paper evaluation failed: {str(e)}"
         )
 

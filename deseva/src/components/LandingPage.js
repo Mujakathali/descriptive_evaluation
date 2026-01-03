@@ -37,12 +37,20 @@ const LandingPage = () => {
                     <p className="text-xl text-text-secondary max-w-3xl mx-auto mb-8">
                         AI-powered system for meaning-based evaluation of descriptive answers with instant feedback.
                     </p>
-                    <button
-                        onClick={handleStartEvaluation}
-                        className="bg-academic-blue hover:bg-blue-600 text-white font-semibold py-3 px-8 rounded-lg transition-colors duration-200 shadow-lg hover:shadow-xl"
-                    >
-                        Start Evaluation
-                    </button>
+                    <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                        <button
+                            onClick={handleStartEvaluation}
+                            className="bg-academic-blue hover:bg-blue-600 text-white font-semibold py-3 px-8 rounded-lg transition-colors duration-200 shadow-lg hover:shadow-xl"
+                        >
+                            Single Question Evaluation
+                        </button>
+                        <button
+                            onClick={() => navigate('/full-paper')}
+                            className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-semibold py-3 px-8 rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl"
+                        >
+                            Full Paper Evaluation
+                        </button>
+                    </div>
                 </div>
 
                 {/* Features Grid */}

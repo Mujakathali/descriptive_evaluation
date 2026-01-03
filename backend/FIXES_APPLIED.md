@@ -1,37 +1,40 @@
-# Dependency Fixes Applied
+# Fixes Applied - Strict Evaluation System
 
-## Issues Fixed
+## ✅ Issue Fixed
 
-1. **sentence-transformers compatibility**: Upgraded from 2.2.2 to 2.7.0 (compatible with newer huggingface-hub)
-2. **huggingface-hub compatibility**: Upgraded to 0.36.0 (removed deprecated `cached_download`)
-3. **torch compatibility**: Upgraded to 2.9.1 (compatible with transformers 4.57.3)
-4. **numpy/scikit-learn binary incompatibility**: Reinstalled scikit-learn to match numpy version
-5. **transformers version**: Upgraded to 4.57.3 (compatible with sentence-transformers 2.7.0)
+**Error**: `NameError: name 'Dict' is not defined` in `schemas.py`
 
-## Final Working Versions
+**Solution**: Added `Dict` to imports from `typing` module
 
-- sentence-transformers: 2.7.0
-- transformers: 4.57.3
-- torch: 2.9.1
-- numpy: 2.4.0 (installed by sentence-transformers)
-- scikit-learn: 1.8.0 (installed by sentence-transformers)
-- huggingface-hub: 0.36.0
-
-## Note on Warnings
-
-The dependency warnings you see are from OTHER packages on your system (tensorflow, streamlit, opencv, etc.) that are NOT part of this backend's requirements. They won't affect the backend functionality.
-
-## Testing
-
-The backend should now start successfully with:
-```bash
-python run.py
+```python
+from typing import List, Optional, Dict
 ```
 
-Or:
-```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
+## ✅ Additional Improvements
 
-Visit http://localhost:8000/health to verify it's working.
+1. **Fixed Pydantic Warning**: Added `protected_namespaces = ()` to `FullPaperEvaluationRequest` to resolve field name conflict warning
 
+2. **Default Weights Updated**: Changed default weights from 70/30 to 50/50 for strict evaluation:
+   - `semantic_weight: float = Field(0.5, ...)`
+   - `concept_weight: float = Field(0.5, ...)`
+
+## ✅ Verification
+
+- ✅ All imports successful
+- ✅ Backend starts without errors
+- ✅ Strict evaluation system fully functional
+- ✅ No linter errors
+
+## 🎯 System Status
+
+**FULLY FUNCTIONAL** ✅
+
+The strict evaluation system is now:
+- ✅ Properly importing all dependencies
+- ✅ Using strict scoring bands
+- ✅ Applying length penalties
+- ✅ Applying concept gating
+- ✅ Using 50/50 default weights
+- ✅ Generating proper labels
+
+Ready for testing!

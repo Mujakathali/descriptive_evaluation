@@ -105,6 +105,12 @@ export const evaluationAPI = {
         const response = await api.post(`/evaluations/${evaluationId}/feedback`, feedback);
         return response.data;
     },
+
+    // Evaluate full question paper
+    evaluateFullPaper: async (data) => {
+        const response = await api.post('/evaluate/full-paper', data);
+        return response.data;
+    },
 };
 
 // Health check function
