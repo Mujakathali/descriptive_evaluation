@@ -6,11 +6,28 @@ logger = logging.getLogger(__name__)
 
 
 def count_words(text: str) -> int:
-    """Count words in text"""
+    """Count meaningful words in text (excludes very short words)"""
     if not text or not text.strip():
         return 0
-    words = re.findall(r'\b\w+\b', text)
-    return len(words)
+    words = re.findall(r'\b\w+\b', text.lower())
+    # Filter out very short words (1-2 characters) as they're likely not meaningful
+    meaningful_words = [w for w in words if len(w) > 2]
+    return len(meaningful_words)
+
+
+def is_not_answered(student_answer: str) -> bool:
+    """
+    Detect if student answer is effectively not answered
+    
+    Rules:
+    - Empty or whitespace only
+    - Fewer than 3 meaningful words
+    """
+    if not student_answer or not student_answer.strip():
+        return True
+    
+    word_count = count_words(student_answer)
+    return word_count < 3
 
 
 def calculate_length_penalty(student_answer: str, max_marks: float) -> float:
@@ -140,6 +157,78 @@ def map_to_score_band(
     return marks, label
 
 
+def generate_reason_for_marks(
+    marks: float,
+    label: str,
+    semantic_similarity: float,
+    concept_coverage: float,
+    word_count: int,
+    covered_concepts_count: int,
+    required_concepts_count: int,
+    length_penalty_applied: bool,
+    concept_gating_applied: bool,
+    is_wrong_definition: bool,
+    is_not_answered: bool
+) -> str:
+    """
+    Generate a 1-2 line explanation for why marks were awarded
+    
+    Returns:
+        String explanation
+    """
+    if is_not_answered:
+        return "No answer provided."
+    
+    if is_wrong_definition:
+        return "Answer is conceptually incorrect."
+    
+    if marks == 0:
+        return "No meaningful content or completely incorrect."
+    
+    reasons = []
+    
+    # Length-based reasons
+    if length_penalty_applied:
+        if word_count < 6:
+            reasons.append("Answer too brief to demonstrate understanding")
+        elif word_count < 10:
+            reasons.append("Answer is too short")
+        else:
+            reasons.append("Answer length insufficient")
+    
+    # Concept-based reasons
+    if concept_gating_applied:
+        if covered_concepts_count == 0:
+            reasons.append("No key concepts mentioned")
+        elif required_concepts_count > 0:
+            coverage_pct = (covered_concepts_count / required_concepts_count) * 100
+            if coverage_pct < 50:
+                reasons.append("Key concepts missing")
+            else:
+                reasons.append("Some key concepts missing")
+    
+    # Quality-based reasons
+    if semantic_similarity < 0.3:
+        reasons.append("Answer does not match expected content")
+    elif semantic_similarity < 0.5:
+        reasons.append("Partial understanding demonstrated")
+    elif semantic_similarity < 0.7:
+        reasons.append("Core idea mentioned but details missing")
+    else:
+        if concept_coverage < 50:
+            reasons.append("Core idea correct but key terms missing")
+        elif concept_coverage < 70:
+            reasons.append("Good understanding with minor gaps")
+        else:
+            reasons.append("Comprehensive answer with good understanding")
+    
+    # Combine reasons
+    if reasons:
+        return ". ".join(reasons[:2]) + "."  # Max 2 reasons
+    else:
+        return "Answer evaluated based on semantic similarity and concept coverage."
+
+
 def calculate_strict_marks(
     semantic_similarity: float,
     concept_coverage: float,
@@ -148,30 +237,63 @@ def calculate_strict_marks(
     max_marks: float,
     student_answer: str,
     covered_concepts: list,
-    required_concepts: list = None
+    required_concepts: list = None,
+    is_ocr_extracted: bool = False,
+    ocr_quality_score: float = 100.0
 ) -> Dict:
     """
     Calculate marks using strict academic standards
     
     Steps:
-    1. Combine similarity and concept scores with weights
-    2. Map to score bands (not linear)
-    3. Apply length penalty
-    4. Apply concept gating
-    5. Determine final label
+    1. Check if not answered (early exit)
+    2. Check if completely wrong (hard zero)
+    3. Combine similarity and concept scores with weights
+    4. Map to score bands (not linear)
+    5. Apply length penalty
+    6. Apply concept gating
+    7. Determine final label
+    8. Generate reason for marks
     
     Returns:
-        dict with marks, label, penalties_applied
+        dict with marks, label, penalties_applied, reason_for_marks
     """
-    # Step 1: Combine scores (50/50 weight by default for strictness)
+    # Step 1: Check if not answered (OVERRIDES ALL OTHER LOGIC)
+    if is_not_answered(student_answer):
+        return {
+            'marks': 0.0,
+            'label': 'Not Answered',
+            'combined_score': 0.0,
+            'length_penalty_applied': False,
+            'concept_gating_applied': False,
+            'reason_for_marks': 'No answer provided.',
+            'is_not_answered': True,
+            'is_wrong_definition': False
+        }
+    
+    # Step 2: Check if completely wrong definition (hard zero)
+    concept_coverage_normalized = concept_coverage / 100.0
+    is_wrong = (semantic_similarity < 0.20) and (concept_coverage == 0.0)
+    
+    if is_wrong:
+        # Hard zero: 0-1 marks only
+        marks = min(1.0, max_marks * 0.1)  # Max 1 mark or 10% of max, whichever is lower
+        return {
+            'marks': round(marks, 1),
+            'label': 'Poor',
+            'combined_score': 0.0,
+            'length_penalty_applied': False,
+            'concept_gating_applied': True,
+            'reason_for_marks': 'Answer is conceptually incorrect.',
+            'is_not_answered': False,
+            'is_wrong_definition': True
+        }
+    
+    # Step 3: Combine scores (50/50 weight by default for strictness)
     # Use provided weights but ensure they sum to 1.0
     weight_sum = semantic_weight + concept_weight
     if abs(weight_sum - 1.0) > 0.01:
         semantic_weight = semantic_weight / weight_sum
         concept_weight = concept_weight / weight_sum
-    
-    # Convert concept coverage from 0-100 to 0-1
-    concept_coverage_normalized = concept_coverage / 100.0
     
     # Combined score
     combined_score = (semantic_similarity * semantic_weight) + (concept_coverage_normalized * concept_weight)
@@ -207,6 +329,23 @@ def calculate_strict_marks(
         elif concept_gated_max <= 5.0:
             if label in ["Excellent", "Very Good", "Good"]:
                 label = "Average"
+
+    scale_factor = max_marks / 10.0
+    
+    # Step 4.5: Apply OCR fairness rules (if OCR-extracted)
+    if is_ocr_extracted:
+        # If OCR quality is low, cap marks at Average
+        if ocr_quality_score < 70:
+            if marks > (5.0 * scale_factor):
+                marks = min(marks, 5.0 * scale_factor)
+                if label in ["Excellent", "Very Good", "Good"]:
+                    label = "Average"
+        
+        # If OCR quality is very low, cap at Poor
+        if ocr_quality_score < 50:
+            if marks > (3.0 * scale_factor):
+                marks = min(marks, 3.0 * scale_factor)
+                label = "Poor"
     
     # Step 5: Ensure marks are non-negative and don't exceed max
     marks = max(0.0, min(marks, max_marks))
@@ -214,7 +353,6 @@ def calculate_strict_marks(
     
     # Final label adjustment based on final marks (scaled to max_marks)
     # Scale thresholds if max_marks != 10
-    scale_factor = max_marks / 10.0
     poor_threshold = 3.0 * scale_factor
     average_threshold = 5.0 * scale_factor
     good_threshold = 7.0 * scale_factor
@@ -231,11 +369,33 @@ def calculate_strict_marks(
     else:
         label = "Excellent"
     
+    # Step 6: Generate reason for marks
+    word_count = count_words(student_answer)
+    covered_concepts_count = len(covered_concepts)
+    required_concepts_count = len(required_concepts) if required_concepts else covered_concepts_count
+    
+    reason_for_marks = generate_reason_for_marks(
+        marks=marks,
+        label=label,
+        semantic_similarity=semantic_similarity,
+        concept_coverage=concept_coverage,
+        word_count=word_count,
+        covered_concepts_count=covered_concepts_count,
+        required_concepts_count=required_concepts_count,
+        length_penalty_applied=length_penalty_max < max_marks,
+        concept_gating_applied=concept_gated_max < max_marks,
+        is_wrong_definition=False,
+        is_not_answered=False
+    )
+    
     return {
         'marks': marks,
         'label': label,
         'combined_score': round(combined_score, 3),
         'length_penalty_applied': length_penalty_max < max_marks,
-        'concept_gating_applied': concept_gated_max < max_marks
+        'concept_gating_applied': concept_gated_max < max_marks,
+        'reason_for_marks': reason_for_marks,
+        'is_not_answered': False,
+        'is_wrong_definition': False
     }
 

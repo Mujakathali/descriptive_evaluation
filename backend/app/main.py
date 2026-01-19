@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.config import settings
 from app.api import evaluate
+from app.api import handwritten_evaluate
 from app.database.db import connect_to_mongo, close_mongo_connection
 from app.models.schemas import HealthResponse
 from datetime import datetime
@@ -55,9 +56,11 @@ app = FastAPI(
 )
 
 # Configure CORS
+cors_origin_regex = r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$" if settings.DEBUG else None
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
+    allow_origin_regex=cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -65,6 +68,11 @@ app.add_middleware(
 
 # Include routers
 app.include_router(evaluate.router)
+try:
+    from app.api import handwritten_evaluate
+    app.include_router(handwritten_evaluate.router)
+except ImportError:
+    logger.warning("Handwritten evaluation router not available")
 
 
 @app.get("/health", response_model=HealthResponse)

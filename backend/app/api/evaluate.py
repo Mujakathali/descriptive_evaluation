@@ -76,18 +76,46 @@ async def evaluate_answer(
                 detail="Both teacher answer and student answer are required"
             )
         
-        # Step 3: Preprocess text
+        # Step 3: Check if not answered (early detection)
+        from app.services.strict_scoring_service import is_not_answered
+        
+        if is_not_answered(student_answer):
+            # Return early with not answered response
+            response_data = {
+                "finalScore": 0.0,
+                "maxMarks": maxMarks,
+                "label": "Not Answered",
+                "semanticSimilarity": 0.0,
+                "conceptCoverage": 0.0,
+                "coveredConcepts": [],
+                "missingConcepts": [],
+                "requiredConcepts": [],
+                "feedback": {
+                    "strengths": [],
+                    "weaknesses": ["No answer provided."],
+                    "suggestions": ["Please provide an answer."]
+                },
+                "conceptAnalysis": [],
+                "penaltiesApplied": {
+                    "lengthPenalty": False,
+                    "conceptGating": False
+                },
+                "reasonForMarks": "No answer provided."
+            }
+            return EvaluationResponse(**response_data)
+        
+        # Step 4: Preprocess text
         teacher_answer_processed = preprocess_text(teacher_answer)
         student_answer_processed = preprocess_text(student_answer)
         
-        # Step 4: Calculate semantic similarity
+        # Step 5: Calculate semantic similarity
         semantic_similarity_score = calculate_semantic_similarity(
             teacher_answer_processed,
             student_answer_processed
         )
         semantic_similarity_percent = round(semantic_similarity_score * 100, 1)
         
-        # Step 5: Calculate concept coverage
+        # Step 6: Calculate concept coverage
         concept_data = calculate_concept_coverage(
             teacher_answer_processed,
             student_answer_processed
@@ -96,7 +124,7 @@ async def evaluate_answer(
         # Extract required concepts from model answer for gating
         required_concepts = extract_concepts_from_text(teacher_answer_processed, max_concepts=15)
         
-        # Step 6: Calculate final marks using strict scoring
+        # Step 7: Calculate final marks using strict scoring
         scoring_result = calculate_strict_marks(
             semantic_similarity_score,
             concept_data["coverage"],
@@ -110,7 +138,7 @@ async def evaluate_answer(
         
         final_marks = scoring_result['marks']
         
-        # Step 7: Generate feedback
+        # Step 8: Generate feedback
         feedback = generate_feedback_llm(
             question=question,
             teacher_answer=teacher_answer_processed,
@@ -120,7 +148,13 @@ async def evaluate_answer(
             max_marks=maxMarks
         )
         
-        # Step 8: Prepare response
+        # If wrong definition, add explicit feedback
+        if scoring_result.get('is_wrong_definition', False):
+            if 'weaknesses' not in feedback:
+                feedback['weaknesses'] = []
+            feedback['weaknesses'].insert(0, 'Answer is conceptually incorrect.')
+        
+        # Step 9: Prepare response
         response_data = {
             "finalScore": final_marks,
             "maxMarks": maxMarks,
@@ -135,7 +169,8 @@ async def evaluate_answer(
             "penaltiesApplied": {
                 "lengthPenalty": scoring_result['length_penalty_applied'],
                 "conceptGating": scoring_result['concept_gating_applied']
-            }
+            },
+            "reasonForMarks": scoring_result.get('reason_for_marks', 'Answer evaluated based on semantic similarity and concept coverage.')
         }
         
         # Step 9: Save to database (async, non-blocking)

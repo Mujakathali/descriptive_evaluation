@@ -16,7 +16,9 @@ def evaluate_full_paper(
     student_answers_text: str,
     marks_per_question: float,
     semantic_weight: float,
-    concept_weight: float
+    concept_weight: float,
+    is_ocr_extracted: bool = False,
+    ocr_quality_score: float = 100.0
 ) -> Dict:
     """
     Evaluate a full question paper with multiple questions
@@ -47,14 +49,16 @@ def evaluate_full_paper(
             student_answer = item['student_answer']
             has_answer = item['has_student_answer']
             
-            # If student didn't answer, assign 0 marks
-            if not has_answer or not student_answer.strip():
+            # Check if not answered (using strict detection)
+            from app.services.strict_scoring_service import is_not_answered
+            
+            if not has_answer or is_not_answered(student_answer):
                 result = {
                     'question_no': question_no,
                     'question': question,
                     'marks': 0.0,
                     'max_marks': marks_per_question,
-                    'label': 'Poor',
+                    'label': 'Not Answered',
                     'semantic_similarity': 0.0,
                     'concept_coverage': 0.0,
                     'covered_concepts': [],
@@ -62,14 +66,15 @@ def evaluate_full_paper(
                     'required_concepts': [],
                     'feedback': {
                         'strengths': [],
-                        'weaknesses': ['Answer not provided for this question.'],
+                        'weaknesses': ['No answer provided.'],
                         'suggestions': ['Please provide an answer for this question.']
                     },
                     'status': 'not_answered',
                     'penalties_applied': {
                         'length_penalty': False,
                         'concept_gating': False
-                    }
+                    },
+                    'reason_for_marks': 'No answer provided.'
                 }
                 question_wise_results.append(result)
                 continue
@@ -103,7 +108,9 @@ def evaluate_full_paper(
                 marks_per_question,
                 student_answer_processed,
                 concept_data["covered_concepts"],
-                required_concepts
+                required_concepts,
+                is_ocr_extracted=is_ocr_extracted,
+                ocr_quality_score=ocr_quality_score
             )
             
             marks = scoring_result['marks']
@@ -119,6 +126,12 @@ def evaluate_full_paper(
                 max_marks=marks_per_question
             )
             
+            # Add OCR-related feedback if applicable
+            if is_ocr_extracted and ocr_quality_score < 70:
+                if 'weaknesses' not in feedback:
+                    feedback['weaknesses'] = []
+                feedback['weaknesses'].append("OCR extraction limitations may affect evaluation accuracy.")
+            
             # Map label to status for consistency
             label_lower = label.lower().replace(' ', '_')
             status_map = {
@@ -126,9 +139,14 @@ def evaluate_full_paper(
                 'very_good': 'very_good',
                 'good': 'good',
                 'average': 'average',
-                'poor': 'poor'
+                'poor': 'poor',
+                'not_answered': 'not_answered'
             }
             status = status_map.get(label_lower, 'average')
+            
+            # Update feedback if wrong definition
+            if scoring_result.get('is_wrong_definition', False):
+                feedback['weaknesses'].insert(0, 'Answer is conceptually incorrect.')
             
             result = {
                 'question_no': question_no,
@@ -146,7 +164,10 @@ def evaluate_full_paper(
                 'penalties_applied': {
                     'length_penalty': scoring_result['length_penalty_applied'],
                     'concept_gating': scoring_result['concept_gating_applied']
-                }
+                },
+                'reason_for_marks': scoring_result.get('reason_for_marks', 'Answer evaluated based on semantic similarity and concept coverage.'),
+                'is_ocr_extracted': is_ocr_extracted,
+                'ocr_quality_score': ocr_quality_score if is_ocr_extracted else None
             }
             
             question_wise_results.append(result)
@@ -156,7 +177,8 @@ def evaluate_full_paper(
         total_marks = total_questions * marks_per_question
         overall_percentage = (total_marks_obtained / total_marks) * 100 if total_marks > 0 else 0
         
-        # Determine overall performance based on percentage
+        # Determine overall performance based on percentage (STRICT MAPPING)
+        # This ensures labels match marks accurately
         if overall_percentage >= 90:
             overall_performance = 'Excellent'
         elif overall_percentage >= 75:
@@ -165,16 +187,19 @@ def evaluate_full_paper(
             overall_performance = 'Good'
         elif overall_percentage >= 35:
             overall_performance = 'Average'
-        else:
+        elif overall_percentage > 0:
             overall_performance = 'Poor'
+        else:
+            overall_performance = 'Not Answered'
         
-        # Calculate statistics based on labels
-        answered_count = sum(1 for r in question_wise_results if r['status'] != 'not_answered')
+        # Calculate statistics based on labels (accurate counts)
+        answered_count = sum(1 for r in question_wise_results if r.get('label') != 'Not Answered' and r['status'] != 'not_answered')
+        not_answered_count = sum(1 for r in question_wise_results if r.get('label') == 'Not Answered' or r['status'] == 'not_answered')
         excellent_count = sum(1 for r in question_wise_results if r.get('label') == 'Excellent')
         very_good_count = sum(1 for r in question_wise_results if r.get('label') == 'Very Good')
         good_count = sum(1 for r in question_wise_results if r.get('label') == 'Good')
         average_count = sum(1 for r in question_wise_results if r.get('label') == 'Average')
-        poor_count = sum(1 for r in question_wise_results if r.get('label') == 'Poor' or r['status'] == 'not_answered')
+        poor_count = sum(1 for r in question_wise_results if r.get('label') == 'Poor' and r.get('label') != 'Not Answered')
         
         summary = {
             'total_questions': total_questions,
@@ -183,14 +208,14 @@ def evaluate_full_paper(
             'overall_percentage': round(overall_percentage, 1),
             'overall_performance': overall_performance,
             'answered_questions': answered_count,
-            'not_answered_questions': total_questions - answered_count,
+            'not_answered_questions': not_answered_count,
             'statistics': {
                 'excellent': excellent_count,
                 'very_good': very_good_count,
                 'good': good_count,
                 'average': average_count,
                 'poor': poor_count,
-                'not_answered': total_questions - answered_count
+                'not_answered': not_answered_count
             }
         }
         
