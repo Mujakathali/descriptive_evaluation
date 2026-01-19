@@ -1,5 +1,4 @@
 import re
-import nltk
 from typing import List
 import logging
 
@@ -7,9 +6,16 @@ logger = logging.getLogger(__name__)
 
 # Download required NLTK data (only once)
 try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt', quiet=True)
+    import nltk  # type: ignore
+except Exception:
+    nltk = None
+
+try:
+    if nltk is not None:
+        nltk.data.find('tokenizers/punkt')
+except Exception:
+    # If punkt isn't available (or download fails in restricted env), we fall back gracefully.
+    pass
 
 
 def preprocess_text(text: str) -> str:
@@ -39,6 +45,9 @@ def split_into_sentences(text: str) -> List[str]:
         return []
     
     try:
+        if nltk is None:
+            raise RuntimeError("NLTK not available")
+ 
         sentences = nltk.sent_tokenize(text)
         # Clean each sentence
         sentences = [preprocess_text(s) for s in sentences if s.strip()]
