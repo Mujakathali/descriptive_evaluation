@@ -24,7 +24,7 @@ const FullPaperResultsPage = () => {
         );
     }
 
-    const { summary, question_wise_results } = result;
+    const { summary, question_wise_results, ocr_warning, ocr_warning_message, ocr_quality_score, is_ocr_extracted } = result;
     const percentage = summary.overall_percentage;
 
     const getStatusColor = (percentage) => {
@@ -79,6 +79,24 @@ const FullPaperResultsPage = () => {
 
             {/* Main Content */}
             <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                {/* OCR Warning Banner */}
+                {ocr_warning && (
+                    <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-lg mb-6">
+                        <div className="flex items-start">
+                            <svg className="w-5 h-5 text-yellow-400 mr-3 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                            <div className="flex-1">
+                                <h3 className="text-sm font-semibold text-yellow-800 mb-1">OCR Quality Warning</h3>
+                                <p className="text-sm text-yellow-700">{ocr_warning_message || 'Handwriting clarity may affect evaluation accuracy.'}</p>
+                                {ocr_quality_score && (
+                                    <p className="text-xs text-yellow-600 mt-1">OCR Confidence: {ocr_quality_score.toFixed(1)}%</p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {/* Summary Card */}
                 <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-8 rounded-2xl shadow-2xl mb-8">
                     <div className="text-center">

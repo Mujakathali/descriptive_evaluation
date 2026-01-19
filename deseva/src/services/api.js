@@ -4,9 +4,6 @@ import axios from 'axios';
 const api = axios.create({
     baseURL: process.env.REACT_APP_API_URL || 'http://localhost:8000',
     timeout: 30000, // 30 seconds timeout
-    headers: {
-        'Content-Type': 'application/json',
-    },
 });
 
 // Request interceptor to add auth token if available
@@ -68,23 +65,14 @@ api.interceptors.response.use(
 export const evaluationAPI = {
     // Evaluate a descriptive answer
     evaluateAnswer: async (data) => {
-        const config = {
-            headers: {
-                'Content-Type': data instanceof FormData ? 'multipart/form-data' : 'application/json',
-            },
-        };
+        const config = data instanceof FormData ? undefined : { headers: { 'Content-Type': 'application/json' } };
         const response = await api.post('/evaluate', data, config);
         return response.data;
     },
 
     // Process teacher file for model training
     processTeacherFile: async (formData) => {
-        const config = {
-            headers: {
-                'Content-Type': 'multipart/form-data',
-            },
-        };
-        const response = await api.post('/process-teacher-file', formData, config);
+        const response = await api.post('/process-teacher-file', formData);
         return response.data;
     },
 
@@ -106,9 +94,15 @@ export const evaluationAPI = {
         return response.data;
     },
 
-    // Evaluate full question paper
+    // Evaluate full question paper (text only)
     evaluateFullPaper: async (data) => {
         const response = await api.post('/evaluate/full-paper', data);
+        return response.data;
+    },
+
+    // Evaluate full question paper with file uploads (handwritten support)
+    evaluateFullPaperHandwritten: async (formData) => {
+        const response = await api.post('/evaluate/full-paper/handwritten', formData);
         return response.data;
     },
 };

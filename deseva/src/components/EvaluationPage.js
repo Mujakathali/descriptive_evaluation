@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { evaluationAPI } from '../services/api';
+import { extractTextFromFile } from '../utils/documentText';
 import FileUpload from './FileUpload';
 import TeacherFileProcessor from './TeacherFileProcessor';
 
@@ -16,21 +17,33 @@ const EvaluationPage = () => {
     });
 
     const [studentAnswer, setStudentAnswer] = useState('');
+    const [teacherQuestionFile, setTeacherQuestionFile] = useState(null);
+    const [teacherModelAnswerFile, setTeacherModelAnswerFile] = useState(null);
     const [teacherFile, setTeacherFile] = useState(null);
     const [studentFile, setStudentFile] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
     const [errors, setErrors] = useState({});
     const [isProcessingTeacherFile, setIsProcessingTeacherFile] = useState(false);
     const [showTeacherProcessor, setShowTeacherProcessor] = useState(false);
+    const [isExtractingTeacherQuestion, setIsExtractingTeacherQuestion] = useState(false);
+    const [isExtractingTeacherModelAnswer, setIsExtractingTeacherModelAnswer] = useState(false);
+    const [teacherExtractError, setTeacherExtractError] = useState('');
+    const [isExtractingStudentText, setIsExtractingStudentText] = useState(false);
+    const [studentExtractStatus, setStudentExtractStatus] = useState(null);
+    const [studentExtractError, setStudentExtractError] = useState('');
 
     const validateForm = () => {
         const newErrors = {};
 
-        if (!teacherData.question.trim() && !teacherFile) {
+        if (isExtractingStudentText || isExtractingTeacherQuestion || isExtractingTeacherModelAnswer) {
+            newErrors.studentAnswer = 'Please wait until the uploaded answer sheet text is extracted.';
+        }
+
+        if (!teacherData.question.trim() && !teacherQuestionFile && !teacherFile) {
             newErrors.question = 'Question is required (either text or file)';
         }
 
-        if (!teacherData.modelAnswer.trim() && !teacherFile) {
+        if (!teacherData.modelAnswer.trim() && !teacherModelAnswerFile && !teacherFile) {
             newErrors.modelAnswer = 'Model answer is required (either text or file)';
         }
 
@@ -66,6 +79,12 @@ const EvaluationPage = () => {
             formData.append('conceptWeight', teacherData.conceptWeight / 100);
 
             // Add files if present
+            if (teacherQuestionFile) {
+                formData.append('teacherQuestionFile', teacherQuestionFile);
+            }
+            if (teacherModelAnswerFile) {
+                formData.append('teacherModelAnswerFile', teacherModelAnswerFile);
+            }
             if (teacherFile) {
                 formData.append('teacherFile', teacherFile);
             }
@@ -84,6 +103,52 @@ const EvaluationPage = () => {
             setErrors({ submit: error.message || 'Failed to evaluate answer. Please try again.' });
         } finally {
             setIsLoading(false);
+        }
+    };
+
+    const handleTeacherQuestionFileSelect = async (file) => {
+        setTeacherQuestionFile(file);
+        setTeacherExtractError('');
+
+        if (!file) {
+            return;
+        }
+
+        setIsExtractingTeacherQuestion(true);
+        try {
+            const extracted = await extractTextFromFile(file, { maxPagesForOcr: 2 });
+            if (!extracted) {
+                setTeacherExtractError('No text could be extracted from the teacher question file.');
+                return;
+            }
+            setTeacherData(prev => ({ ...prev, question: extracted }));
+        } catch (e) {
+            setTeacherExtractError(e?.message || 'Failed to extract text from teacher question file.');
+        } finally {
+            setIsExtractingTeacherQuestion(false);
+        }
+    };
+
+    const handleTeacherModelAnswerFileSelect = async (file) => {
+        setTeacherModelAnswerFile(file);
+        setTeacherExtractError('');
+
+        if (!file) {
+            return;
+        }
+
+        setIsExtractingTeacherModelAnswer(true);
+        try {
+            const extracted = await extractTextFromFile(file, { maxPagesForOcr: 2 });
+            if (!extracted) {
+                setTeacherExtractError('No text could be extracted from the teacher model answer file.');
+                return;
+            }
+            setTeacherData(prev => ({ ...prev, modelAnswer: extracted }));
+        } catch (e) {
+            setTeacherExtractError(e?.message || 'Failed to extract text from teacher model answer file.');
+        } finally {
+            setIsExtractingTeacherModelAnswer(false);
         }
     };
 
@@ -135,12 +200,39 @@ const EvaluationPage = () => {
         }
     };
 
-    const handleStudentFileSelect = (file) => {
+    const handleStudentFileSelect = async (file) => {
         setStudentFile(file);
+        setStudentExtractError('');
+        setStudentExtractStatus(null);
+
         // Clear student answer text when file is selected
         setStudentAnswer('');
         if (errors.studentAnswer) {
             setErrors(prev => ({ ...prev, studentAnswer: '' }));
+        }
+
+        if (!file) {
+            return;
+        }
+
+        // Extract text from file (PDF text layer OR OCR fallback)
+        setIsExtractingStudentText(true);
+        try {
+            const extracted = await extractTextFromFile(file, {
+                maxPagesForOcr: 2,
+                onProgress: (p) => setStudentExtractStatus(p),
+            });
+
+            if (!extracted) {
+                setStudentExtractError('No text could be extracted from the uploaded file.');
+                return;
+            }
+
+            setStudentAnswer(extracted);
+        } catch (e) {
+            setStudentExtractError(e?.message || 'Failed to extract text from file.');
+        } finally {
+            setIsExtractingStudentText(false);
         }
     };
 
@@ -197,6 +289,24 @@ const EvaluationPage = () => {
                                 <label className="block text-sm font-medium text-text-primary mb-2">
                                     Question <span className="text-red-500">*</span>
                                 </label>
+                                <div className="mb-3">
+                                    <FileUpload
+                                        label="Upload Question (PDF/Image)"
+                                        onFileSelect={handleTeacherQuestionFileSelect}
+                                        acceptedTypes={['application/pdf', 'image/jpeg', 'image/png', 'image/jpg']}
+                                        maxSize={10 * 1024 * 1024}
+                                        preview={true}
+                                    />
+                                    {isExtractingTeacherQuestion && (
+                                        <div className="mt-2 text-xs text-academic-blue flex items-center">
+                                            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-academic-blue" fill="none" viewBox="0 0 24 24">
+                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                            </svg>
+                                            Extracting question text...
+                                        </div>
+                                    )}
+                                </div>
                                 <textarea
                                     value={teacherData.question}
                                     onChange={(e) => handleInputChange('question', e.target.value)}
@@ -212,6 +322,24 @@ const EvaluationPage = () => {
                                 <label className="block text-sm font-medium text-text-primary mb-2">
                                     Model Answer <span className="text-red-500">*</span>
                                 </label>
+                                <div className="mb-3">
+                                    <FileUpload
+                                        label="Upload Model Answer (PDF/Image)"
+                                        onFileSelect={handleTeacherModelAnswerFileSelect}
+                                        acceptedTypes={['application/pdf', 'image/jpeg', 'image/png', 'image/jpg']}
+                                        maxSize={10 * 1024 * 1024}
+                                        preview={true}
+                                    />
+                                    {isExtractingTeacherModelAnswer && (
+                                        <div className="mt-2 text-xs text-academic-blue flex items-center">
+                                            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-academic-blue" fill="none" viewBox="0 0 24 24">
+                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                            </svg>
+                                            Extracting model answer text...
+                                        </div>
+                                    )}
+                                </div>
                                 <textarea
                                     value={teacherData.modelAnswer}
                                     onChange={(e) => handleInputChange('modelAnswer', e.target.value)}
@@ -223,6 +351,15 @@ const EvaluationPage = () => {
                                 {errors.modelAnswer && <p className="text-red-500 text-sm mt-1">{errors.modelAnswer}</p>}
                             </div>
 
+                            {teacherExtractError && (
+                                <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                                    <p className="text-red-600 text-sm">{teacherExtractError}</p>
+                                    <p className="text-red-500 text-xs mt-1">
+                                        Tip: If this is a scanned/handwritten PDF, OCR quality depends on scan clarity.
+                                    </p>
+                                </div>
+                            )}
+
                             <div className="border-t border-border-light pt-4">
                                 <div className="flex items-center justify-between mb-3">
                                     <label className="block text-sm font-medium text-text-primary">
@@ -233,7 +370,7 @@ const EvaluationPage = () => {
                                         className="text-xs text-academic-blue hover:text-blue-600 font-medium flex items-center"
                                     >
                                         <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c-.94 1.543.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c.94-1.543-.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c-.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                                         </svg>
                                         Advanced Processing
@@ -368,10 +505,47 @@ const EvaluationPage = () => {
                                     className="mb-3"
                                 />
 
+                                {isExtractingStudentText && (
+                                    <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                                        <div className="flex items-center text-sm text-blue-700">
+                                            <svg className="animate-spin -ml-1 mr-3 h-4 w-4 text-blue-700" fill="none" viewBox="0 0 24 24">
+                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                            </svg>
+                                            Extracting text from uploaded file...
+                                        </div>
+                                        {studentExtractStatus?.phase && (
+                                            <div className="text-xs text-blue-600 mt-2">
+                                                {studentExtractStatus.phase === 'pdf_text' && (
+                                                    <span>Reading PDF text layer (page {studentExtractStatus.page}/{studentExtractStatus.total})</span>
+                                                )}
+                                                {studentExtractStatus.phase === 'pdf_ocr_render' && (
+                                                    <span>Preparing OCR (page {studentExtractStatus.page}/{studentExtractStatus.total})</span>
+                                                )}
+                                                {studentExtractStatus.phase === 'pdf_ocr' && (
+                                                    <span>Running OCR (page {studentExtractStatus.page}/{studentExtractStatus.total})</span>
+                                                )}
+                                                {studentExtractStatus.phase === 'pdf_ocr_progress' && (
+                                                    <span>OCR progress (page {studentExtractStatus.page}/{studentExtractStatus.total}): {Math.round((studentExtractStatus.progress || 0) * 100)}%</span>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {studentExtractError && (
+                                    <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+                                        <p className="text-red-600 text-sm">{studentExtractError}</p>
+                                        <p className="text-red-500 text-xs mt-1">
+                                            Tip: If this is a scanned/handwritten PDF, OCR may be slow and depends on scan quality.
+                                        </p>
+                                    </div>
+                                )}
+
                                 <div className="space-y-2">
                                     <button className="w-full py-2 px-4 border border-border-light rounded-lg text-sm text-text-primary hover:bg-gray-50 transition-colors flex items-center justify-center">
                                         <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0118.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
                                         </svg>
                                         Scan Answer Sheet
@@ -404,11 +578,19 @@ const EvaluationPage = () => {
 
                     <button
                         onClick={handleEvaluate}
-                        disabled={isLoading}
-                        className={`bg-academic-blue hover:bg-blue-600 text-white font-semibold py-3 px-8 rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl ${isLoading ? 'opacity-50 cursor-not-allowed' : ''
+                        disabled={isLoading || isExtractingStudentText || isExtractingTeacherQuestion || isExtractingTeacherModelAnswer}
+                        className={`bg-academic-blue hover:bg-blue-600 text-white font-semibold py-3 px-8 rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl ${(isLoading || isExtractingStudentText || isExtractingTeacherQuestion || isExtractingTeacherModelAnswer) ? 'opacity-50 cursor-not-allowed' : ''
                             }`}
                     >
-                        {isLoading ? (
+                        {(isExtractingStudentText || isExtractingTeacherQuestion || isExtractingTeacherModelAnswer) ? (
+                            <span className="flex items-center">
+                                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                Extracting Text...
+                            </span>
+                        ) : isLoading ? (
                             <span className="flex items-center">
                                 <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
                                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>

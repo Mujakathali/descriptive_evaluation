@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 const FileUpload = ({
     label,
@@ -8,6 +8,7 @@ const FileUpload = ({
     className = '',
     preview = false
 }) => {
+    const inputRef = useRef(null);
     const [dragActive, setDragActive] = useState(false);
     const [selectedFile, setSelectedFile] = useState(null);
     const [error, setError] = useState('');
@@ -80,18 +81,18 @@ const FileUpload = ({
             {!selectedFile ? (
                 <div
                     className={`relative border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${dragActive
-                            ? 'border-academic-blue bg-blue-50'
-                            : 'border-border-light hover:border-academic-green hover:bg-gray-50'
+                        ? 'border-academic-blue bg-blue-50'
+                        : 'border-border-light hover:border-academic-green hover:bg-gray-50'
                         }`}
                     onDragEnter={handleDrag}
                     onDragLeave={handleDrag}
                     onDragOver={handleDrag}
                     onDrop={handleDrop}
-                    onClick={() => document.getElementById(`file-input-${label}`).click()}
+                    onClick={() => inputRef.current?.click()}
                 >
                     <input
-                        id={`file-input-${label}`}
                         type="file"
+                        ref={inputRef}
                         className="hidden"
                         accept={acceptedTypes?.join(',')}
                         onChange={handleFileInput}

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { evaluationAPI } from '../services/api';
+import FileUpload from './FileUpload';
 
 const FullPaperEvaluationPage = () => {
     const navigate = useNavigate();
@@ -14,22 +15,65 @@ const FullPaperEvaluationPage = () => {
         conceptWeight: 30
     });
 
+    const [files, setFiles] = useState({
+        questionFile: null,
+        modelAnswerFile: null,
+        studentAnswerFile: null
+    });
+
     const [isLoading, setIsLoading] = useState(false);
     const [errors, setErrors] = useState({});
+
+    const formatErrorDetail = (detail) => {
+        if (!detail) return '';
+        if (typeof detail === 'string') return detail;
+
+        if (Array.isArray(detail)) {
+            return detail
+                .map((item) => {
+                    if (!item) return '';
+                    if (typeof item === 'string') return item;
+
+                    const msg = item?.msg ? String(item.msg) : '';
+                    const locParts = Array.isArray(item?.loc) ? item.loc : [];
+                    const loc = locParts.length > 1 ? locParts.slice(1).join('.') : locParts.join('.');
+
+                    if (msg && loc) return `${loc}: ${msg}`;
+                    if (msg) return msg;
+
+                    try {
+                        return JSON.stringify(item);
+                    } catch {
+                        return String(item);
+                    }
+                })
+                .filter(Boolean)
+                .join(' | ');
+        }
+
+        if (detail?.msg) return String(detail.msg);
+
+        try {
+            return JSON.stringify(detail);
+        } catch {
+            return String(detail);
+        }
+    };
 
     const validateForm = () => {
         const newErrors = {};
 
-        if (!formData.questions.trim()) {
-            newErrors.questions = 'Question paper is required';
+        // At least one input method required for each
+        if (!formData.questions.trim() && !files.questionFile) {
+            newErrors.questions = 'Question paper is required (either text or file)';
         }
 
-        if (!formData.modelAnswers.trim()) {
-            newErrors.modelAnswers = 'Model answer key is required';
+        if (!formData.modelAnswers.trim() && !files.modelAnswerFile) {
+            newErrors.modelAnswers = 'Model answer key is required (either text or file)';
         }
 
-        if (!formData.studentAnswers.trim()) {
-            newErrors.studentAnswers = 'Student answer sheet is required';
+        if (!formData.studentAnswers.trim() && !files.studentAnswerFile) {
+            newErrors.studentAnswers = 'Student answer sheet is required (either text or file)';
         }
 
         if (!formData.marksPerQuestion || formData.marksPerQuestion <= 0) {
@@ -48,19 +92,45 @@ const FullPaperEvaluationPage = () => {
         setIsLoading(true);
 
         try {
-            const result = await evaluationAPI.evaluateFullPaper({
-                questions: formData.questions,
-                model_answers: formData.modelAnswers,
-                student_answers: formData.studentAnswers,
-                marks_per_question: formData.marksPerQuestion,
-                semantic_weight: formData.semanticWeight / 100,
-                concept_weight: formData.conceptWeight / 100
-            });
+            // Prepare FormData for file uploads
+            const formDataToSend = new FormData();
+
+            // Add text fields (if provided)
+            if (formData.questions.trim()) {
+                formDataToSend.append('questions', formData.questions);
+            }
+            if (formData.modelAnswers.trim()) {
+                formDataToSend.append('model_answers', formData.modelAnswers);
+            }
+            if (formData.studentAnswers.trim()) {
+                formDataToSend.append('student_answers', formData.studentAnswers);
+            }
+
+            // Add files (if provided)
+            if (files.questionFile) {
+                formDataToSend.append('question_file', files.questionFile);
+            }
+            if (files.modelAnswerFile) {
+                formDataToSend.append('model_answer_file', files.modelAnswerFile);
+            }
+            if (files.studentAnswerFile) {
+                formDataToSend.append('student_answer_sheet', files.studentAnswerFile);
+            }
+
+            // Add configuration
+            formDataToSend.append('marks_per_question', formData.marksPerQuestion);
+            formDataToSend.append('semantic_weight', formData.semanticWeight / 100);
+            formDataToSend.append('concept_weight', formData.conceptWeight / 100);
+
+            // Call the handwritten evaluation API
+            const result = await evaluationAPI.evaluateFullPaperHandwritten(formDataToSend);
 
             navigate('/full-paper-results', { state: { result, formData } });
         } catch (error) {
             console.error('Evaluation error:', error);
-            setErrors({ submit: error.response?.data?.detail || error.message || 'Failed to evaluate paper. Please try again.' });
+            const detail = error.response?.data?.detail;
+            const formattedDetail = formatErrorDetail(detail);
+            setErrors({ submit: formattedDetail || error.message || 'Failed to evaluate paper. Please try again.' });
         } finally {
             setIsLoading(false);
         }
@@ -76,6 +146,27 @@ const FullPaperEvaluationPage = () => {
             setErrors(prev => ({
                 ...prev,
                 [field]: ''
+            }));
+        }
+    };
+
+    const handleFileSelect = (fileType, file) => {
+        setFiles(prev => ({
+            ...prev,
+            [fileType]: file
+        }));
+
+        // Clear error for this field
+        const fieldMap = {
+            questionFile: 'questions',
+            modelAnswerFile: 'modelAnswers',
+            studentAnswerFile: 'studentAnswers'
+        };
+
+        if (errors[fieldMap[fileType]]) {
+            setErrors(prev => ({
+                ...prev,
+                [fieldMap[fileType]]: ''
             }));
         }
     };
@@ -104,7 +195,7 @@ const FullPaperEvaluationPage = () => {
                                 <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
                                     Full Paper Evaluation
                                 </h1>
-                                <p className="text-sm text-gray-500">Evaluate complete question papers at once</p>
+                                <p className="text-sm text-gray-500">Evaluate complete question papers with file uploads</p>
                             </div>
                         </div>
                     </div>
@@ -119,20 +210,20 @@ const FullPaperEvaluationPage = () => {
                         <svg className="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
-                        Format Instructions
+                        Upload Options
                     </h2>
                     <div className="grid md:grid-cols-3 gap-4 text-sm">
                         <div>
                             <p className="font-semibold mb-1">Questions:</p>
-                            <p className="opacity-90">Number each question: 1. Question text 2. Question text...</p>
+                            <p className="opacity-90">Upload PDF/image or enter text with numbering (1. Question 2. Question...)</p>
                         </div>
                         <div>
                             <p className="font-semibold mb-1">Model Answers:</p>
-                            <p className="opacity-90">Match numbering: 1. Answer 2. Answer...</p>
+                            <p className="opacity-90">Upload PDF/image or enter text with matching numbers (1. Answer 2. Answer...)</p>
                         </div>
                         <div>
                             <p className="font-semibold mb-1">Student Answers:</p>
-                            <p className="opacity-90">Match numbering: 1. Answer 2. Answer...</p>
+                            <p className="opacity-90">Upload handwritten PDF/image or enter text. OCR will extract text automatically.</p>
                         </div>
                     </div>
                 </div>
@@ -148,6 +239,20 @@ const FullPaperEvaluationPage = () => {
                             </div>
                             <h2 className="text-xl font-semibold text-gray-800">Question Paper</h2>
                         </div>
+
+                        {/* File Upload */}
+                        <div className="mb-4">
+                            <FileUpload
+                                label="Upload Question Paper (PDF, JPG, PNG)"
+                                onFileSelect={(file) => handleFileSelect('questionFile', file)}
+                                acceptedTypes={['application/pdf', 'image/jpeg', 'image/png', 'image/jpg', 'text/plain']}
+                                maxSize={10 * 1024 * 1024}
+                            />
+                        </div>
+
+                        <div className="text-sm text-gray-500 mb-2 text-center">OR</div>
+
+                        {/* Text Input */}
                         <textarea
                             value={formData.questions}
                             onChange={(e) => handleInputChange('questions', e.target.value)}
@@ -168,6 +273,20 @@ const FullPaperEvaluationPage = () => {
                             </div>
                             <h2 className="text-xl font-semibold text-gray-800">Model Answer Key</h2>
                         </div>
+
+                        {/* File Upload */}
+                        <div className="mb-4">
+                            <FileUpload
+                                label="Upload Model Answer Key (PDF, JPG, PNG)"
+                                onFileSelect={(file) => handleFileSelect('modelAnswerFile', file)}
+                                acceptedTypes={['application/pdf', 'image/jpeg', 'image/png', 'image/jpg', 'text/plain']}
+                                maxSize={10 * 1024 * 1024}
+                            />
+                        </div>
+
+                        <div className="text-sm text-gray-500 mb-2 text-center">OR</div>
+
+                        {/* Text Input */}
                         <textarea
                             value={formData.modelAnswers}
                             onChange={(e) => handleInputChange('modelAnswers', e.target.value)}
@@ -188,6 +307,23 @@ const FullPaperEvaluationPage = () => {
                             </div>
                             <h2 className="text-xl font-semibold text-gray-800">Student Answer Sheet</h2>
                         </div>
+
+                        {/* File Upload - Handwritten Support */}
+                        <div className="mb-4">
+                            <FileUpload
+                                label="Upload Handwritten Answer Sheet (PDF, JPG, PNG)"
+                                onFileSelect={(file) => handleFileSelect('studentAnswerFile', file)}
+                                acceptedTypes={['application/pdf', 'image/jpeg', 'image/png', 'image/jpg']}
+                                maxSize={10 * 1024 * 1024}
+                            />
+                            <p className="text-xs text-gray-500 mt-2">
+                                📝 OCR will automatically extract text from handwritten sheets
+                            </p>
+                        </div>
+
+                        <div className="text-sm text-gray-500 mb-2 text-center">OR</div>
+
+                        {/* Text Input */}
                         <textarea
                             value={formData.studentAnswers}
                             onChange={(e) => handleInputChange('studentAnswers', e.target.value)}
@@ -301,4 +437,3 @@ const FullPaperEvaluationPage = () => {
 };
 
 export default FullPaperEvaluationPage;
-
